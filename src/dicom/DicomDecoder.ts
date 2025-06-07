@@ -70,19 +70,15 @@ export default class DicomDecoder implements FileDecoder {
         // Separate multiplex data to each channel.
         const digChannels = [] as Int16Array[]
         const physChannels = [] as Float32Array[]
-        const maxSamples = this._input.byteLength/ws.NumberOfWaveformChannels
         for (let i=0; i<ws.NumberOfWaveformChannels; i++) {
             const channel = ws.ChannelDefinitionSequence[i]
             const channelOffset = channel.ChannelOffset || 0
             const sampleSkew = (channel.ChannelSampleSkew || 0) + channelOffset*ws.SamplingFrequency
             const timeSkew = (channel.ChannelTimeSkew || 0) + channelOffset
-            const nSamples = Math.min(
-                maxSamples - sampleSkew,
-                maxSamples - timeSkew*ws.SamplingFrequency
-            )
+            const nSamples = ws.NumberOfWaveformSamples
             Log.debug(`Channel ${i} has a skew of ${sampleSkew} samples / ${timeSkew} seconds.`, SCOPE)
             digChannels.push(new Int16Array(new ArrayBuffer(nSamples*2)))
-            physChannels.push(new Float32Array(new ArrayBuffer(nSamples*4)))
+            physChannels.push((new Float32Array(new ArrayBuffer(nSamples*4))).fill(0.0))
         }
         const multiplexArray = new Int16Array(this._input)
         for (let i=0; i<ws.NumberOfWaveformSamples; i++) {

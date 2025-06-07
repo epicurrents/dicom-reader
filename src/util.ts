@@ -5,17 +5,79 @@
  * @license    Apache-2.0
  */
 
-import type { DicomHeader, DicomSignalInfo } from '#types'
+import type { DicomDataset } from '#types'
 import { GenericBiosignalHeader } from '@epicurrents/core'
+import type { DicomAnnotationSequence, DicomChannelDefinitionSequence } from '#types'
+import { secondsToTimeString } from '@epicurrents/core/dist/util'
+
+export const annotationsToBiosignalAnnotations = (annotations: DicomAnnotationSequence[]) => {
+    return annotations.map((annotation) => {
+        // Required properties of a biosignal annotation are:
+        // start: number, duration: number, label: string.
+        return {
+            channels: annotation.ReferencedWaveformChannels || [],
+            duration: 0,
+            label: annotation.UnformattedTextValue || '',
+            start: annotation.ReferencedTimeOffsets || 0, // This is in seconds.
+        }
+    })
+}
 
 /**
+ * Convert DICOM date time to a JavaScript Date object.
+ * @param dateTime - DICOM date time in the format "YYYYMMDD[HHMMSS[.FFFFFF]]"
+ * @returns JavaScript Date object representing the DICOM date time.
+ */
+export const convertDicomDateTime = (dateTime: string): Date => {
+    // DICOM date time is in the format "YYYYMMDD[HHMMSS[.FFFFFF]]"
+    // Time is expressed in local time (of the recording) and we'll display it as such.
+    const trimmed = dateTime.trim() // Datetime can be padded at the end.
+    const y = trimmed.slice(0, 4)
+    const m = trimmed.slice(4, 6)
+    const d = trimmed.slice(6, 8)
+    if (trimmed.length < 14) {
+        // If the date time is only in the format "YYYYMMDD", we can set the time to midnight.
+        return new Date(`${y}-${m}-${d}T00:00:00`)
+    }
+    // Otherwise, we need to parse the time component as well.
+    // DICOM date time can have milliseconds, so we need to handle that as well.
+    const hr = trimmed.slice(8, 10)
+    const min = trimmed.slice(10, 12)
+    const sec = trimmed.slice(12, 14)
+    const msec = trimmed.length > 14 ? trimmed.slice(14) : ''
+    //
+    // If milliseconds are present, we need to add a dot before them.
+    const isoDateTime = `${y}-${m}-${d}T${hr}:${min}:${sec}${msec || ''}`
+    return new Date(isoDateTime)
+}
+/**
+ * Convert DICOM time to a formatted time string or an object with time components.
+ * @param time - DICOM time in the format "HH[MM[SS[.FFFFFF]]]"
+ * @param components - Return an object with hours, minutes, seconds and milliseconds instead of a formatted string.
+ * @returns Formatted time string or an object with time components.
+ */
+export const dicomTimeToTimeString = (time: string, components = false): ReturnType<typeof secondsToTimeString> => {
+    // DICOM time is in the format "HH[MM[SS[.FFFFFF]]]"
+    // We can safely assume that the time is always in UTC, so we can use the Date constructor directly.
+    const trimmed = time.trim() // Time can be padded at the end.
+    const hr = trimmed.slice(0, 2)
+    const min = trimmed.length >= 4 ? trimmed.slice(2, 4) : '0'
+    const sec = trimmed.length >= 6 ? trimmed.slice(4) : '0'
+    // Convert to seconds and return a formatted string.
+    const totalSeconds = parseInt(hr)*3600 + parseInt(min)*60 + parseFloat(sec)
+    return secondsToTimeString(totalSeconds, components)
+}
+/**
  * Try to extract the modality of signal from the signal info.
- * @param signal - Signal information from the DICOM header.
+ * @param channel - Channel definition from the DICOM header.
  * @param labelMatchers - A map of labels (RegExp strings) to signal modalities (optional).
  * @returns Modality of the signal or empty string if unsuccessful.
  */
-export const extractSignalModality = (signal: DicomSignalInfo, labelMatchers?: Map<string, string>): string => {
-    const label = signal.label
+export const extractSignalModality = (
+    channel: DicomChannelDefinitionSequence,
+    labelMatchers?: Map<string, string>
+): string => {
+    const label = channel.ChannelLabel || ''
     const matchers = labelMatchers
                         ? labelMatchers
                         : new Map<string, string>()
@@ -32,7 +94,7 @@ export const extractSignalModality = (signal: DicomSignalInfo, labelMatchers?: M
         }
     }
     for (const [matchLabel, matchType] of matchers) {
-        if (label.match(new RegExp(matchLabel))) {
+        if (label.match(new RegExp(matchLabel, 'i'))) {
             return matchType
         }
     }
@@ -40,98 +102,46 @@ export const extractSignalModality = (signal: DicomSignalInfo, labelMatchers?: M
 }
 /**
  * Convert the given DICOM header record into generic biosignal header.
- * @param header - Parsed DICOM header.
+ * @param header - Parsed DICOM header (essentially the whole DICOM recording).
  * @returns Biosignal header record.
  */
-export const headerToBiosignalHeader = (header: DicomHeader) => {
+export const headerToBiosignalHeader = (header: DicomDataset) => {
+    // There should be only one waveform sequence in the DICOM header.
+    const ws = header.WaveformSequence[0]
+    // Multiplexed DICOM signals contain channel samples in a consecutive order. The parsed DICOM file already contains
+    // the extracted signals so we can basically ignore this.
+    const nDataUnits = ws.NumberOfWaveformSamples
+    const dataUnitLength = 1/ws.SamplingFrequency
+    const dataUnitSize = (ws.WaveformBitsAllocated/8)*ws.NumberOfWaveformChannels
     const biosigheader = new GenericBiosignalHeader(
-        header.dataFormat,
-        header.patientId,
-        header.patientId,
-        header.dataRecordCount,
-        header.dataRecordDuration,
-        header.recordByteSize,
-        header.signalCount,
-        header.signalInfo.map((s: any) => {
+        'dicom',
+        header.StudyID,
+        header.PatientID,
+        nDataUnits,
+        dataUnitLength,
+        dataUnitSize,
+        ws.NumberOfWaveformChannels,
+        ws.ChannelDefinitionSequence.map((s: DicomChannelDefinitionSequence) => {
             return {
-                label: s.label,
+                label: s.ChannelLabel,
                 modality: extractSignalModality(s),
-                name: s.label,
-                physicalUnit: s.physicalUnit,
-                prefiltering: '',
-                sampleCount: s.sampleCount,
-                samplingRate: 0,
-                sensitivity: 0,
-                sensor: s.transducerType,
+                name: s.ChannelLabel,
+                physicalUnit: s.ChannelSensitivityUnitsSequence[0].CodeValue || '',
+                prefiltering: {
+                    bandreject: [],
+                    highpass: s.FilterHighFrequency || 0,
+                    lowpass: s.FilterLowFrequency || 0,
+                    notch: s.NotchFilterFrequency || 0,
+                },
+                sampleCount: ws.NumberOfWaveformSamples,
+                samplingRate: ws.SamplingFrequency,
+                sensitivity: 0, // Has a different meaning in DICOM, so we set it to 0.
+                sensor: 'Unknown',
             }
         }),
-        header.recordingDate,
-        header.discontinuous,
+        convertDicomDateTime(header.AcquisitionDateTime),
+        false, // DICOM files are always continuous.
         [],
     )
     return biosigheader
-}
-/**
- * Convert a string to a UTF-8 byte array.
- * @param input - The string to convert to a UTF-8 byte array.
- * @returns An array of bytes representing the UTF-8 encoded string.
- * @privateRemarks
- * Not really needed since TextEncoder is available in most browsers, but I'll leave this here in case a polyfill is
- * needed at some point.
- * Inspired by from https://gist.github.com/joni/3760795.
- */
-export const textToUTF8Array = (input: string) => {
-    const output = [] as number[]
-    for (let i=0; i<input.length; i++) {
-        let charcode = input.charCodeAt(i)
-        if (charcode < 0x80) {
-            // 0x00-0x7F is a single byte in UTF-8, we can add it directly.
-            output.push(charcode)
-        }  else if (charcode < 0x800) {
-            // 0x80-0x7FF is a two-byte sequence in UTF-8.
-            // The first byte is 0xc0 + (charcode >> 6) and the second byte is 0x80 + (charcode & 0x3f).
-            // This means the first byte has the two most significant bits set to 1 and the next six bits are the first
-            // six bits of the character code, and the second byte has the two most significant bits set to 0 and the
-            // next six bits are the last six bits of the character code.
-            output.push(
-                0xc0 | (charcode >> 6),
-                0x80 | (charcode & 0x3f)
-            )
-        } else if (charcode < 0xd800 || charcode >= 0xe000) {
-            // 0x800-0xFFFF is a three-byte sequence in UTF-8.
-            // The first byte is 0xe0 + (charcode >> 12), the second byte is 0x80 + ((charcode >> 6) & 0x3f), and the
-            // third byte is 0x80 + (charcode & 0x3f).
-            // This means the first byte has the three most significant bits set to 1 and the next four bits are the
-            // first four bits of the character code, the second byte has the two most significant bits set to 1 and
-            // the next six bits are the next six bits of the character code, and the third byte has the two most
-            // significant bits set to 0 and the next six bits are the last six bits of the character code.
-            // We skip surrogate pairs (0xd800-0xdfff) here, as they are not valid UTF-8 characters.
-            output.push(
-                0xe0 | (charcode >> 12),
-                0x80 | ((charcode >> 6) & 0x3f),
-                0x80 | (charcode & 0x3f)
-            )
-        } else {
-            // Surrogate pairs handling.
-            // JavaScript's internal UTF-16 encodes 0x10000-0x10FFFF by subtracting 0x10000 and splits the 20 bits
-            // from 0x0-0xFFFFF into two parts.
-            // The first byte is 0xf0 + (charcode >> 18), the second byte is 0x80 + ((charcode >> 12) & 0x3f),
-            // the third byte is 0x80 + ((charcode >> 6) & 0x3f), and the fourth byte is 0x80 + (charcode & 0x3f).
-            // We need to increment the index to skip the next character, as we are processing a surrogate pair.
-            // Note: The input string is expected to be a valid UTF-16 string, so we assume that the next character
-            // is always a valid surrogate pair character.
-            i++
-            charcode = 0x10000 + (
-                ((charcode & 0x3ff) << 10)
-                | (input.charCodeAt(i) & 0x3ff)
-            )
-            output.push(
-                0xf0 | (charcode >> 18),
-                0x80 | ((charcode >> 12) & 0x3f),
-                0x80 | ((charcode >> 6) & 0x3f),
-                0x80 | (charcode & 0x3f)
-            )
-        }
-    }
-    return output
 }

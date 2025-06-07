@@ -13,8 +13,9 @@ import type {
     StudyContextFile,
     StudyFileContext,
 } from '@epicurrents/core/dist/types'
-import Log from 'scoped-event-log'
-
+import { headerToBiosignalHeader } from '#util'
+import type { DicomDataset } from '#types'
+import { Log } from 'scoped-event-log'
 import * as dcmjs from 'dcmjs'
 
 const SCOPE = 'DicomImporter'
@@ -35,6 +36,57 @@ export default class DicomImporter extends GenericFileReader implements SignalFi
         super(SCOPE, [], fileTypeAssocs)
         this._useSAB = useSAB
         //this._getWorkerSubstitute = () => new DicomWorkerSubstitute()
+    }
+
+    protected _readAndStoreMetadata (dataset: DicomDataset) {
+        if (!this._study) {
+            Log.error('No study available to insert channel info into.', SCOPE)
+            return
+        }
+        if (!dataset.WaveformSequence || !dataset.WaveformSequence[0]) {
+            Log.error('No waveform sequence found in the DICOM dataset.', SCOPE)
+            return
+        }
+        const ws = dataset.WaveformSequence[0]
+        const channels = []
+        for (const c of ws.ChannelDefinitionSequence || []) {
+            const cSensitivity = (c.ChannelSensitivity || 1)*(c.ChannelSensitivityCorrectionFactor || 1)
+            const unitLow = (c.ChannelSensitivityUnitsSequence[0].CodeValue || '').toLowerCase()
+            const scale = unitLow === 'uv' || unitLow === 'µv' ? 0
+                        : unitLow === 'mv'
+                            ? -3 : unitLow === 'v'
+                                ?  -6 : 0
+            channels.push({
+                channelNumber: c.WaveformChannelNumber || 0,
+                filter: {
+                    bandreject: [],
+                    highpass: c.FilterHighFrequency || 0,
+                    lowpass: c.FilterLowFrequency || 0,
+                    notch: c.NotchFilterFrequency || 0,
+                },
+                label: c.ChannelLabel || '',
+                name: c.ChannelLabel || '',
+                physicalMax: 32767*cSensitivity,
+                physicalMin: -32768*cSensitivity,
+                sampleCount: ws.NumberOfWaveformSamples || 0,
+                samplesPerRecord: 1,
+                samplingRate: ws.SamplingFrequency || 0,
+                scale,
+                sensitivity: cSensitivity,
+                signal: new Float32Array(),
+                transducer: '', // Unknown.
+                unit: c.ChannelSensitivityUnitsSequence[0].CodeValue || '',
+            })
+        }
+        const datasetHeader = { ...dataset }
+        datasetHeader.WaveformSequence[0].WaveformData.length = 0 // Remove the actual data to save memory.
+        this._study.meta = {
+            channels,
+            header: headerToBiosignalHeader(dataset),
+            formatHeader: datasetHeader,
+        }
+        this._study.format = 'dicom'
+        this._study.modality = 'signal'
     }
 
     getFileTypeWorker (override?: string): Worker | null {
@@ -65,23 +117,14 @@ export default class DicomImporter extends GenericFileReader implements SignalFi
             modality: 'signal',
             url: config?.url || URL.createObjectURL(file),
         } as StudyContextFile
-        try {
-            const dcmBuffer = file.arrayBuffer()
-            let DicomDict = dcmjs.data.DicomMessage.readFile(dcmBuffer)
-            const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(DicomDict.dict)
-            console.log(dataset)
-            // Re-encode dataset: DicomDict.dict = dcmjs.data.DicomMetaDictionary.denaturalizeDataset(dataset)
-            // Get writer buffer: DicomDict.write()
-        } catch (e: unknown) {
-            Log.error(`DICOM header parsing error:`, SCOPE, e as Error)
-            return null
-        }
         this._study.files.push(studyFile)
+        const dicom = await dcmjs.data.DicomMessage.readFile(file.arrayBuffer())
+        const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset
+        this._readAndStoreMetadata(dataset)
         return studyFile
     }
 
     async readHeader (_source: ArrayBuffer): Promise<BiosignalHeaderRecord | null> {
-
         return null
     }
 
@@ -99,17 +142,22 @@ export default class DicomImporter extends GenericFileReader implements SignalFi
             modality: 'signal',
             url: config?.url || url,
         } as StudyContextFile
+        this._study.files.push(studyFile)
         try {
-            const dicom = await fetch(url)
-            const dcmBuffer = await dicom.arrayBuffer()
-            let DicomDict = dcmjs.data.DicomMessage.readFile(dcmBuffer)
-            const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(DicomDict.dict)
-            console.log(dataset)
+            // We need to get the whole file to read the header.
+            const response = await fetch(url)
+            if (!response.ok) {
+                Log.error(`Failed to fetch DICOM file from ${url}.`, SCOPE)
+                return null
+            }
+            const arrayBuffer = await response.arrayBuffer()
+            const dicom = await dcmjs.data.DicomMessage.readFile(arrayBuffer)
+            const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset
+            this._readAndStoreMetadata(dataset)
         } catch (e: unknown) {
             Log.error(`DICOM header parsing error:`, SCOPE, e as Error)
             return null
         }
-        this._study.files.push(studyFile)
         return studyFile
     }
 }

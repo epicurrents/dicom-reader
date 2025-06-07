@@ -7,14 +7,13 @@
 
 import { SETTINGS } from '@epicurrents/core'
 import type {
-    BiosignalHeaderRecord,
     ConfigChannelFilter,
     WorkerMessage,
 } from '@epicurrents/core/dist/types'
 import { Log } from 'scoped-event-log'
 import { validateCommissionProps } from '@epicurrents/core/dist/util'
 import DicomReader from '#dicom/DicomReader'
-import { DicomHeader } from '#types'
+
 
 const SCOPE = "DicomWorker"
 
@@ -76,11 +75,10 @@ onmessage = async (message: WorkerMessage) => {
         try {
             const sigs = await getSignals(data.range, data.config)
             const annos = getAnnotations(data.range)
-            const gaps = getDataGaps(data.range)
             if (sigs) {
                 return returnSuccess({
                     annotations: annos,
-                    dataGaps: gaps,
+                    interruptions: [],
                     range: message.data.range,
                     ...sigs
                 })
@@ -128,20 +126,16 @@ onmessage = async (message: WorkerMessage) => {
     } else if (action === 'setup-worker') {
         const data = validateCommissionProps(
             message.data as WorkerMessage['data'] & {
-                formatHeader: DicomHeader
-                header: BiosignalHeaderRecord
                 url: string
             },
             {
-                formatHeader: 'Object',
-                header: 'Object',
                 url: 'String',
             }
         )
         if (!data) {
             return returnFailure(`Validating commission props failed.`)
         }
-        if (await setupStudy(data.header, data.formatHeader, data.url)) {
+        if (await setupStudy(data.url)) {
             return returnSuccess({
                 dataLength: READER.dataLength,
                 recordingLength: READER.totalLength,
@@ -177,10 +171,6 @@ const getAnnotations = (range: number[]) => {
     return READER.getAnnotations(range)
 }
 
-const getDataGaps = (range: number[]) => {
-    return READER.getDataGaps(range)
-}
-
 const getSignals = (range: number[], config?: ConfigChannelFilter) => {
     return READER.getSignals(range, config)
 }
@@ -191,9 +181,9 @@ const getSignals = (range: number[], config?: ConfigChannelFilter) => {
  * @returns Success (true/false).
  */
 const cacheSignalsFromUrl = () => {
-    return READER.cacheSignalsFromUrl()
+    return READER.cacheUrl()
 }
 
-const setupStudy = async (header: BiosignalHeaderRecord, dcmHeader: DicomHeader, url: string) => {
-    return READER.setupStudy(header, dcmHeader, url)
+const setupStudy = async (url: string) => {
+    return READER.setupStudy(url)
 }

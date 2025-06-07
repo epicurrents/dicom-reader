@@ -88,6 +88,9 @@ onmessage = async (message: WorkerMessage) => {
         } catch (e) {
             return returnFailure(e as string)
         }
+    } else if (action === 'release-cache') {
+        await READER.releaseCache()
+        return returnSuccess()
     } else if (action === 'setup-cache') {
         if (message.data.useMemoryManager) {
             const data = validateCommissionProps(
@@ -120,9 +123,6 @@ onmessage = async (message: WorkerMessage) => {
                 return returnFailure(`Cache setup failed.`)
             }
         }
-    } else if (action === 'release-cache') {
-        await READER.releaseCache()
-        return returnSuccess()
     } else if (action === 'setup-worker') {
         const data = validateCommissionProps(
             message.data as WorkerMessage['data'] & {
@@ -133,6 +133,7 @@ onmessage = async (message: WorkerMessage) => {
             }
         )
         if (!data) {
+            Log.error(`Invalid data for setup-worker action.`, SCOPE)
             return returnFailure(`Validating commission props failed.`)
         }
         if (await setupStudy(data.url)) {
@@ -141,6 +142,7 @@ onmessage = async (message: WorkerMessage) => {
                 recordingLength: READER.totalLength,
             })
         } else {
+            Log.error(`Setting up study failed.`, SCOPE)
             return returnFailure(`Setting up study failed.`)
         }
     } else if (action === 'shutdown') {

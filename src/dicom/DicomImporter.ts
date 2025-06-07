@@ -83,7 +83,7 @@ export default class DicomImporter extends GenericFileReader implements SignalFi
         this._study.meta = {
             channels,
             header: headerToBiosignalHeader(dataset),
-            formatHeader: datasetHeader,
+            formatHeader: null, // The DICOM dataset is not serializable so we won't return it in case this is a worker.
         }
         this._study.format = 'dicom'
         this._study.modality = 'signal'

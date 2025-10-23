@@ -11,13 +11,13 @@ import type { DicomChannelDefinitionSequence, DicomDataset } from '#types'
 import type { AnnotationTemplate } from '@epicurrents/core/dist/types'
 
 export default class DicomDatasetRecord extends GenericBiosignalHeader {
-    protected _physicalSignals = [] as Float32Array[]
+    protected _physicalSignals = [] as number[][]
     protected _rawSignals: Int16Array[]
 
     constructor (
         dataset: DicomDataset,
         rawSignals = [] as Int16Array[],
-        physicalSignals = [] as Float32Array[],
+        physicalSignals = [] as number[][],
         annotations = [] as AnnotationTemplate[],
     ) {
         // There should be only one waveform sequence in the DICOM header.

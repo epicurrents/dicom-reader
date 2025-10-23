@@ -6,7 +6,7 @@
  */
 
 
-import type { FileDecoder } from '@epicurrents/core/dist/types'
+import type { SignalDataDecoder } from '@epicurrents/core/dist/types'
 import type { DicomDataset } from '#types'
 import { annotationsToBiosignalAnnotations } from '#util'
 import DicomDatasetRecord from '#dicom/DicomDatasetRecord'
@@ -14,7 +14,7 @@ import { Log } from 'scoped-event-log'
 
 const SCOPE = 'DicomDecoder'
 
-export default class DicomDecoder implements FileDecoder {
+export default class DicomDecoder implements SignalDataDecoder {
     protected _dataset: DicomDataset | null = null
     protected _input: ArrayBuffer | null = null
     protected _output: null | DicomDatasetRecord = null
@@ -69,7 +69,8 @@ export default class DicomDecoder implements FileDecoder {
         }
         // Separate multiplex data to each channel.
         const digChannels = [] as Int16Array[]
-        const physChannels = [] as Float32Array[]
+        const physChannels = [] as number[][]
+        const sampleScales = new Array<number>(ws.NumberOfWaveformChannels).fill(1.0)
         for (let i=0; i<ws.NumberOfWaveformChannels; i++) {
             const channel = ws.ChannelDefinitionSequence[i]
             const channelOffset = channel.ChannelOffset || 0
@@ -78,7 +79,12 @@ export default class DicomDecoder implements FileDecoder {
             const nSamples = ws.NumberOfWaveformSamples
             Log.debug(`Channel ${i} has a skew of ${sampleSkew} samples / ${timeSkew} seconds.`, SCOPE)
             digChannels.push(new Int16Array(new ArrayBuffer(nSamples*2)))
-            physChannels.push((new Float32Array(new ArrayBuffer(nSamples*4))).fill(0.0))
+            physChannels.push(new Array(nSamples).fill(0.0))
+            const physUnit = channel.ChannelSensitivityUnitsSequence[0]?.CodeValue || ''
+            // Convert to to volts.
+            const sampleScale = physUnit.toLowerCase() === 'uv' || physUnit.toLowerCase() === 'µv' ? 1e-6
+                                : physUnit.toLowerCase() === 'mv' ? 1e-3 : 1.0
+            sampleScales[i] = sampleScale
         }
         const multiplexArray = new Int16Array(this._input)
         for (let i=0; i<ws.NumberOfWaveformSamples; i++) {
@@ -110,17 +116,16 @@ export default class DicomDecoder implements FileDecoder {
                     physChannels[j][i] = 0
                     continue
                 }
-                // Convert digital sample to a floating point value.
+                // Convert digital sample to a floating point value and apply scaling.
                 const physValue = sampleValue*ws.ChannelDefinitionSequence[j].ChannelSensitivity
                                   * ws.ChannelDefinitionSequence[j].ChannelSensitivityCorrectionFactor
                                   - ws.ChannelDefinitionSequence[j].ChannelBaseline
-                // Directly assigning the values is considerably faster than using `set()`.
-                physChannels[j][i] = physValue
+                physChannels[j][i] = physValue*sampleScales[j]
             }
         }
         return {
             annotations: annotationsToBiosignalAnnotations(dataset.WaveformAnnotationSequence),
-            interruptions: [], // DICOM waveform sequence does not have interruptions.
+            interruptions: new Map(), // DICOM waveform sequence does not have interruptions.
             signals: physChannels,
         }
     }

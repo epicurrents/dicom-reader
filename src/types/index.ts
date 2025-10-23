@@ -80,13 +80,9 @@ export type DicomChannelSourceModifiersSequence = {
     CodingSchemeDesignator: string // "Unknown"
 }
 
-export type DicomConceptCodeSequence = {
+export type DicomConceptCodeSequence = object
 
-}
-
-export type DicomConceptNameCodeSequence = {
-
-}
+export type DicomConceptNameCodeSequence = object
 
 export type DicomDataset = {
     AccessionNumber: string

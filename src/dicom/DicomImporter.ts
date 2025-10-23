@@ -5,11 +5,11 @@
  * @license    Apache-2.0
  */
 
-import { GenericFileReader } from '@epicurrents/core'
+import { GenericStudyImporter } from '@epicurrents/core'
 import type {
     BiosignalHeaderRecord,
     ConfigReadUrl,
-    SignalFileReader,
+    SignalStudyImporter,
     StudyContextFile,
     StudyFileContext,
 } from '@epicurrents/core/dist/types'
@@ -20,7 +20,7 @@ import * as dcmjs from 'dcmjs'
 
 const SCOPE = 'DicomImporter'
 
-export default class DicomImporter extends GenericFileReader implements SignalFileReader {
+export default class DicomImporter extends GenericStudyImporter implements SignalStudyImporter {
     //protected _decoder = new DicomDecoder()
     protected _useSAB: boolean
 
@@ -103,7 +103,7 @@ export default class DicomImporter extends GenericFileReader implements SignalFi
         return worker
     }
 
-    async readFile (source: File | StudyFileContext, config?: ConfigReadUrl) {
+    async importFile (source: File | StudyFileContext, config?: ConfigReadUrl) {
         const file = (source as StudyFileContext).file || source as File
         Log.debug(`Loading DICOM from file ${file.webkitRelativePath}.`, SCOPE)
         const studyFile = {
@@ -128,7 +128,7 @@ export default class DicomImporter extends GenericFileReader implements SignalFi
         return null
     }
 
-    async readUrl (source: string | StudyFileContext, config?: ConfigReadUrl) {
+    async importUrl (source: string | StudyFileContext, config?: ConfigReadUrl) {
         const url = (source as StudyFileContext).url || source as string
         Log.debug(`Loading DICOM from url ${url}.`, SCOPE)
         const studyFile = {

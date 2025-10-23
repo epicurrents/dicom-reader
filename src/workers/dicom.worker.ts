@@ -43,9 +43,9 @@ onmessage = async (message: WorkerMessage) => {
         })
     }
     Log.debug(`Received message with action ${action}.`, SCOPE)
-    if (action === 'cache-signals-from-url') {
+    if (action === 'cache-signals') {
         try {
-            const success = await cacheSignalsFromUrl()
+            const success = await cacheSignals()
             return returnSuccess({ complete: success })
         } catch (e) {
             Log.error(
@@ -182,8 +182,8 @@ const getSignals = (range: number[], config?: ConfigChannelFilter) => {
  * @param startFrom - Start caching from the given time point (in seconds) - optional.
  * @returns Success (true/false).
  */
-const cacheSignalsFromUrl = () => {
-    return READER.cacheUrl()
+const cacheSignals = () => {
+    return READER.cacheSignals()
 }
 
 const setupStudy = async (url: string) => {

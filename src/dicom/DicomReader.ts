@@ -6,14 +6,13 @@
  */
 
 //import type { DicomHeader } from '#types'
-import { BiosignalCache, BiosignalMutex, GenericSignalReader } from '@epicurrents/core'
-import { AppSettings, ConfigChannelFilter, SignalCachePart, SignalDataReader } from '@epicurrents/core/dist/types'
+import { GenericSignalReader } from '@epicurrents/core'
+import { AppSettings, SignalCachePart, SignalDataReader } from '@epicurrents/core/dist/types'
 import DicomDecoder from '#dicom/DicomDecoder'
 import { annotationsToBiosignalAnnotations } from '#util'
 import type { DicomDataset } from '#types'
 import * as dcmjs from 'dcmjs'
 import { Log } from 'scoped-event-log/dist/Log'
-import { type MutexExportProperties } from 'asymmetric-io-mutex'
 
 const SCOPE = 'DicomReader'
 
@@ -33,20 +32,20 @@ export default class DicomReader extends GenericSignalReader implements SignalDa
     protected _updateCache () {
         if (!this._fileTypeHeader || !this._cache) {
             Log.error(`No DICOM dataset or cache available to update.`, SCOPE)
-            return
+            return false
         }
         this._decoder ??= new DicomDecoder(this._fileTypeHeader)
         const data = this._decoder.decodeData(this._fileTypeHeader)
         if (!data?.signals) {
             Log.error(`Failed to decode DICOM dataset.`, SCOPE)
-            return
+            return false
         }
         const part = {
             start: 0,
             end: this._totalDataLength,
             signals: data.signals.map((sig) => {
                 return {
-                    data: sig,
+                    data: new Float32Array(sig),
                     samplingRate: this._fileTypeHeader!.WaveformSequence[0].SamplingFrequency,
                 }
             })
@@ -63,151 +62,11 @@ export default class DicomReader extends GenericSignalReader implements SignalDa
                 success: true,
             })
         }
-    }
-
-    /**
-     * Cache data from the given file.
-     * @param file - Optional file to cache signals from (defaults to cached dataset).
-     * @returns Promise that resolves when the file is cached.
-     */
-    async cacheFile (file?: File) {
-        if (file && !this.setupStudy(file)) {
-            Log.error(`Failed to cache data from file ${file.name}.`, SCOPE)
-            return
-        }
-        if (!this._fileTypeHeader) {
-            Log.error(`No DICOM dataset available to cache data from.`, SCOPE)
-            return
-        }
-        this._updateCache()
-    }
-    /**
-     * Cache data from the given URL.
-     * @param url - Optional URL of the DICOM file to cache signals from (defaults to cached dataset).
-     * @returns Success (true/false).
-     */
-    async cacheUrl (url?: string): Promise<boolean> {
-        if (url && !this.setupStudy(url)) {
-            Log.error(`Failed to cache data from URL ${url}.`, SCOPE)
-            return false
-        }
-        if (!this._fileTypeHeader) {
-            Log.error(`No DICOM dataset available to cache signals from.`, SCOPE)
-            return false
-        }
-        this._updateCache()
         return true
     }
 
-    async getSignals(range: number[], config?: ConfigChannelFilter): Promise<SignalCachePart | null> {
-        if (!this._fileTypeHeader || !this._cache) {
-            Log.error("Cannot load signals, signal cache has not been set up yet.", SCOPE)
-            return null
-        }
-        if (this._mutex && !this._isMutexReady) {
-            Log.error(`Cannot load signals before signal cache has been initiated.`, SCOPE)
-            return null
-        }
-        if (range[0] === range[1]) {
-            Log.error(`Cannot load signals from an empty range ${range[0]} - ${range[1]}.`, SCOPE)
-            return null
-        }
-        const requestedSigs = await this._cache.asCachePart()
-        // Filter channels, if needed.
-        const included = [] as number[]
-        // Prioritize include -> only process those channels.
-        if (config?.include?.length) {
-            for (let i=0; i<requestedSigs.signals.length; i++) {
-                if (config.include.indexOf(i) !== -1) {
-                    included.push(i)
-                } else {
-                    Log.debug(`Not including channel #${i} in requested signals.`, SCOPE)
-                }
-            }
-        } else if (config?.exclude?.length) {
-            for (let i=0; i<requestedSigs.signals.length; i++) {
-                if (config.exclude.indexOf(i) === -1) {
-                    included.push(i)
-                } else {
-                    Log.debug(`Excuding channel #${i} from requested signals.`, SCOPE)
-                }
-            }
-        }
-        const responseSigs = {
-            start: requestedSigs.start,
-            end: requestedSigs.end,
-            signals: [],
-        } as SignalCachePart
-        const rangeStart = range[0]
-        const rangeEnd = range[1]
-        for (let i=0; i<requestedSigs.signals.length; i++) {
-            if (included.length && included.indexOf(i) === -1) {
-                continue
-            }
-            const signalForRange = new Float32Array(
-                Math.round((range[1] - range[0])*requestedSigs.signals[i].samplingRate)
-            ).fill(0.0)
-            const startSignalIndex = Math.round(
-                (rangeStart - requestedSigs.start)*requestedSigs.signals[i].samplingRate
-            )
-            const endSignalIndex = Math.round(
-                (rangeEnd - requestedSigs.start)*requestedSigs.signals[i].samplingRate
-            )
-            signalForRange.set(requestedSigs.signals[i].data.slice(startSignalIndex, endSignalIndex))
-            responseSigs.signals.push({
-                data: signalForRange,
-                samplingRate: requestedSigs.signals[i].samplingRate,
-            })
-        }
-        return responseSigs
-    }
-
-    setupCache (dataDuration = 0) {
-        if (this._fallbackCache) {
-            Log.warn(`Tried to re-initialize already initialized EDF signal cache.`, SCOPE)
-        } else {
-            this._fallbackCache = new BiosignalCache(dataDuration || this._totalDataLength || 0)
-        }
-        return this._fallbackCache
-    }
-
-    async setupMutex (buffer: SharedArrayBuffer, bufferStart: number): Promise<MutexExportProperties|null> {
-        if (this._mutex) {
-            Log.warn(`Tried to re-initialize already initialized DICOM signal cache.`, SCOPE)
-            return this._mutex.propertiesForCoupling
-        }
-        if (!this._fileTypeHeader) {
-            Log.error([`Cannot initialize mutex cache.`, `Dataset has not been set.`], SCOPE)
-            return null
-        }
-        // Construct a SignalCachePart to initialize the mutex.
-        const cacheProps = {
-            start: 0,
-            end: 0,
-            signals: []
-        } as SignalCachePart
-        const ws = this._fileTypeHeader.WaveformSequence[0]
-        for (const _sig of ws.ChannelDefinitionSequence) {
-            cacheProps.signals.push({
-                data: new Float32Array(),
-                samplingRate: ws.SamplingFrequency,
-            })
-        }
-        this._mutex = new BiosignalMutex()
-        Log.debug(`Initiating DICOM reader mutex cache.`, SCOPE)
-        this._mutex.initSignalBuffers(cacheProps, this._totalDataLength, buffer, bufferStart)
-        Log.debug(`DICOM reader cache initiation complete.`, SCOPE)
-        // Mutex is fully set up.
-        this._isMutexReady = true
-        return this._mutex.propertiesForCoupling
-    }
-
-    /**
-     * Set the update callback to get loading updates.
-     * @param callback A method that takes the loading update as a parameter.
-     */
-    setUpdateCallback (callback: ((update: { [prop: string]: unknown }) => void) | null) {
-        this._updateCallback = callback
+    async cacheSignals(): Promise<boolean> {
+        return this._updateCache()
     }
 
     /**

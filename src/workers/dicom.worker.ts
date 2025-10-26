@@ -170,7 +170,8 @@ const updateCallback = (update: { [prop: string]: unknown }) => {
 READER.setUpdateCallback(updateCallback)
 
 const getAnnotations = (range: number[]) => {
-    return READER.getAnnotations(range)
+    // TODO: DICOM labels?
+    return READER.getEvents(range)
 }
 
 const getSignals = (range: number[], config?: ConfigChannelFilter) => {

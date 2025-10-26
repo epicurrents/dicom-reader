@@ -9,7 +9,7 @@
 import { GenericSignalReader } from '@epicurrents/core'
 import { AppSettings, SignalCachePart, SignalDataReader } from '@epicurrents/core/dist/types'
 import DicomDecoder from '#dicom/DicomDecoder'
-import { annotationsToBiosignalAnnotations } from '#util'
+import { eventsToBiosignalEvents } from '#util'
 import type { DicomDataset } from '#types'
 import * as dcmjs from 'dcmjs'
 import { Log } from 'scoped-event-log/dist/Log'
@@ -55,7 +55,7 @@ export default class DicomReader extends GenericSignalReader implements SignalDa
             // Notify that the cache has been updated.
             this._updateCallback({
                 action: 'cache-signals',
-                annotations: annotationsToBiosignalAnnotations(this._fileTypeHeader.WaveformAnnotationSequence),
+                events: eventsToBiosignalEvents(this._fileTypeHeader.WaveformAnnotationSequence),
                 // DICOM files dont't have interruptions.
                 interruptions: [],
                 range: [0, this._totalRecordingLength],

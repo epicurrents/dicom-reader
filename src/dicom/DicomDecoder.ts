@@ -8,7 +8,7 @@
 
 import type { SignalDataDecoder } from '@epicurrents/core/dist/types'
 import type { DicomDataset } from '#types'
-import { annotationsToBiosignalAnnotations } from '#util'
+import { eventsToBiosignalEvents } from '#util'
 import DicomDatasetRecord from '#dicom/DicomDatasetRecord'
 import { Log } from 'scoped-event-log'
 
@@ -124,7 +124,8 @@ export default class DicomDecoder implements SignalDataDecoder {
             }
         }
         return {
-            annotations: annotationsToBiosignalAnnotations(dataset.WaveformAnnotationSequence),
+            // TODO: Combine or separate events and labels in response?
+            annotations: eventsToBiosignalEvents(dataset.WaveformAnnotationSequence),
             interruptions: new Map(), // DICOM waveform sequence does not have interruptions.
             signals: physChannels,
         }

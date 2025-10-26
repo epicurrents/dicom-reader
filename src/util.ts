@@ -11,17 +11,17 @@ import type { DicomAnnotationSequence, DicomChannelDefinitionSequence } from '#t
 import { secondsToTimeString } from '@epicurrents/core/dist/util'
 import type { AnnotationTemplate } from '@epicurrents/core/dist/types'
 
-export const annotationsToBiosignalAnnotations = (annotations: DicomAnnotationSequence[]) => {
-    return annotations.map((annotation) => {
+export const eventsToBiosignalEvents = (events: DicomAnnotationSequence[]) => {
+    return events.map((event) => {
         // Required properties of a biosignal annotation are:
         // start: number, duration: number, label: string.
         return {
-            channels: annotation.ReferencedWaveformChannels || [],
+            channels: event.ReferencedWaveformChannels || [],
             class: "event",
             duration: 0,
-            label: annotation.UnformattedTextValue || '',
+            label: event.UnformattedTextValue || '',
             priority: 400,
-            start: annotation.ReferencedTimeOffsets || 0, // This is in seconds.
+            start: event.ReferencedTimeOffsets || 0, // This is in seconds.
         } as AnnotationTemplate
     })
 }

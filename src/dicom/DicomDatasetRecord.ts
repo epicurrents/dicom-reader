@@ -8,7 +8,7 @@
 import { GenericBiosignalHeader } from '@epicurrents/core'
 import { convertDicomDateTime, extractSignalModality } from '#util'
 import type { DicomChannelDefinitionSequence, DicomDataset } from '#types'
-import type { AnnotationTemplate } from '@epicurrents/core/dist/types'
+import type { AnnotationEventTemplate } from '@epicurrents/core/dist/types'
 
 export default class DicomDatasetRecord extends GenericBiosignalHeader {
     protected _physicalSignals = [] as number[][]
@@ -18,7 +18,7 @@ export default class DicomDatasetRecord extends GenericBiosignalHeader {
         dataset: DicomDataset,
         rawSignals = [] as Int16Array[],
         physicalSignals = [] as number[][],
-        annotations = [] as AnnotationTemplate[],
+        events = [] as AnnotationEventTemplate[],
     ) {
         // There should be only one waveform sequence in the DICOM header.
         const ws = dataset.WaveformSequence[0]
@@ -55,7 +55,7 @@ export default class DicomDatasetRecord extends GenericBiosignalHeader {
             }),
             convertDicomDateTime(dataset.AcquisitionDateTime),
             false, // DICOM files are always continuous.
-            annotations,
+            events,
         )
         this._rawSignals = rawSignals
         this._physicalSignals = physicalSignals

@@ -9,7 +9,7 @@ import type { DicomDataset } from '#types'
 import { GenericBiosignalHeader } from '@epicurrents/core'
 import type { DicomAnnotationSequence, DicomChannelDefinitionSequence } from '#types'
 import { secondsToTimeString } from '@epicurrents/core/dist/util'
-import type { AnnotationTemplate } from '@epicurrents/core/dist/types'
+import type { AnnotationEventTemplate } from '@epicurrents/core/dist/types'
 
 export const eventsToBiosignalEvents = (events: DicomAnnotationSequence[]) => {
     return events.map((event) => {
@@ -22,7 +22,7 @@ export const eventsToBiosignalEvents = (events: DicomAnnotationSequence[]) => {
             label: event.UnformattedTextValue || '',
             priority: 400,
             start: event.ReferencedTimeOffsets || 0, // This is in seconds.
-        } as AnnotationTemplate
+        } as AnnotationEventTemplate
     })
 }
 

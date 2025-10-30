@@ -125,7 +125,7 @@ export default class DicomDecoder implements SignalDataDecoder {
         }
         return {
             // TODO: Combine or separate events and labels in response?
-            annotations: eventsToBiosignalEvents(dataset.WaveformAnnotationSequence),
+            events: eventsToBiosignalEvents(dataset.WaveformAnnotationSequence),
             interruptions: new Map(), // DICOM waveform sequence does not have interruptions.
             signals: physChannels,
         }

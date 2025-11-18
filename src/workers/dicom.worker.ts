@@ -65,7 +65,7 @@ onmessage = async (message: WorkerMessage) => {
                 range: number[]
             },
             {
-                config: ['Object', 'undefined'],
+                config: 'Object?',
                 range: ['Number', 'Number'],
             }
         )

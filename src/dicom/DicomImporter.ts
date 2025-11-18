@@ -51,11 +51,6 @@ export default class DicomImporter extends GenericStudyImporter implements Signa
         const channels = []
         for (const c of ws.ChannelDefinitionSequence || []) {
             const cSensitivity = (c.ChannelSensitivity || 1)*(c.ChannelSensitivityCorrectionFactor || 1)
-            const unitLow = (c.ChannelSensitivityUnitsSequence[0].CodeValue || '').toLowerCase()
-            const scale = unitLow === 'uv' || unitLow === 'µv' ? 0
-                        : unitLow === 'mv'
-                            ? -3 : unitLow === 'v'
-                                ?  -6 : 0
             channels.push({
                 channelNumber: c.WaveformChannelNumber || 0,
                 filter: {
@@ -71,8 +66,8 @@ export default class DicomImporter extends GenericStudyImporter implements Signa
                 sampleCount: ws.NumberOfWaveformSamples || 0,
                 samplesPerRecord: 1,
                 samplingRate: ws.SamplingFrequency || 0,
-                scale,
-                sensitivity: cSensitivity,
+                scale: 0, // Scale here is always 0 as we convert the source signals into volts.
+                sensitivity: 0, // DICOM channel sensitivity is not the same as EC source channel sensitivity.
                 signal: new Float32Array(),
                 transducer: '', // Unknown.
                 unit: c.ChannelSensitivityUnitsSequence[0].CodeValue || '',

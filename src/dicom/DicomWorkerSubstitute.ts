@@ -61,7 +61,7 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
                         range: number[]
                     },
                     {
-                        config: ['Object', 'undefined'],
+                        config: 'Object?',
                         range: ['Number', 'Number'],
                     },
                     true,

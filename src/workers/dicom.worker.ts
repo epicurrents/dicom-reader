@@ -48,9 +48,8 @@ onmessage = async (message: WorkerMessage) => {
             const success = await cacheSignals()
             return returnSuccess({ complete: success })
         } catch (e) {
-            Log.error(
-                `An error occurred while trying to cache signals, operation was aborted.`,
-            SCOPE, e as Error)
+            // A caught failure must still settle the commission or the caller waits forever.
+            return returnFailure(`Caching signals failed: ${(e as Error).message}.`)
         }
     } else if (action === 'get-signals') {
         // The direct get-signals should only be encountered when the requested signals have not been cached yet,

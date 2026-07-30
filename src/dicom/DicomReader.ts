@@ -76,19 +76,26 @@ export default class DicomReader extends GenericSignalReader implements SignalDa
      */
     async setupStudy (source: string | File): Promise<boolean> {
         if (typeof source === 'string') {
-            const response = await fetch(source)
-            if (!response.ok) {
-                Log.error(`Failed to fetch DICOM file from ${source}.`, SCOPE)
+            try {
+                const response = await fetch(source)
+                if (!response.ok) {
+                    Log.error(`Failed to fetch DICOM file from ${source} (HTTP ${response.status}).`, SCOPE)
+                    return false
+                }
+                const arrayBuffer = await response.arrayBuffer()
+                const dicom = await dcmjs.data.DicomMessage.readFile(arrayBuffer)
+                const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset
+                if (!dataset) {
+                    Log.error(`Failed to read DICOM file from ${source}.`, SCOPE)
+                    return false
+                }
+                this._fileTypeHeader = dataset
+            } catch (e: unknown) {
+                // A transport failure (offline, DNS, CORS, TLS) must resolve to false, not reject
+                // up into the worker handler where no reply would be posted and the commission hangs.
+                Log.error(`Failed to load DICOM file from ${source}: ${(e as Error).message}.`, SCOPE)
                 return false
             }
-            const arrayBuffer = await response.arrayBuffer()
-            const dicom = await dcmjs.data.DicomMessage.readFile(arrayBuffer)
-            const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset
-            if (!dataset) {
-                Log.error(`Failed to read DICOM file from ${source}.`, SCOPE)
-                return false
-            }
-            this._fileTypeHeader = dataset
         } else if (source instanceof File) {
             const dicom = await dcmjs.data.DicomMessage.readFile(source.arrayBuffer())
             const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset

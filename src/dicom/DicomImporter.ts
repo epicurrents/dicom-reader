@@ -140,12 +140,7 @@ export default class DicomImporter extends GenericStudyImporter implements Signa
         this._study.files.push(studyFile)
         try {
             // We need to get the whole file to read the header.
-            const response = await fetch(url)
-            if (!response.ok) {
-                Log.error(`Failed to fetch DICOM file from ${url}.`, SCOPE)
-                return null
-            }
-            const arrayBuffer = await response.arrayBuffer()
+            const arrayBuffer = await this._fetchArrayBuffer(url, { authHeader: config?.authHeader })
             const dicom = await dcmjs.data.DicomMessage.readFile(arrayBuffer)
             const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset
             this._readAndStoreMetadata(dataset)

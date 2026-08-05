@@ -108,10 +108,14 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
             case 'setup-worker': {
                 const data = validateCommissionProps(
                     message as WorkerMessage['data'] & {
-                        url: string
+                        url?: string
+                        file?: File
                     },
                     {
-                        url: 'String',
+                        // A local study is read from the File and a remote one from the URL, so neither
+                        // can be required on its own; `setupStudy` rejects a source that has neither.
+                        url: 'String?',
+                        file: 'File?',
                     },
                     true,
                     this.returnMessage.bind(this)
@@ -119,7 +123,7 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
                 if (!data) {
                     return
                 }
-                const result = await this._reader.setupStudy(data.url)
+                const result = await this._reader.setupStudy({ file: data.file, url: data.url })
                 if (result) {
                     return this.returnSuccess({
                         ...message,

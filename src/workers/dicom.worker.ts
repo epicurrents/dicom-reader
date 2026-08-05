@@ -8,6 +8,7 @@
 import { SETTINGS } from '@epicurrents/core'
 import type {
     ConfigChannelFilter,
+    SignalSourceOptions,
     WorkerMessage,
 } from '@epicurrents/core/dist/types'
 import { Log } from 'scoped-event-log'
@@ -125,17 +126,21 @@ onmessage = async (message: WorkerMessage) => {
     } else if (action === 'setup-worker') {
         const data = validateCommissionProps(
             message.data as WorkerMessage['data'] & {
-                url: string
+                url?: string
+                file?: File
             },
             {
-                url: 'String',
+                // A local study is read from the File and a remote one from the URL, so neither
+                // can be required on its own; `setupStudy` rejects a source that has neither.
+                url: 'String?',
+                file: 'File?',
             }
         )
         if (!data) {
             Log.error(`Invalid data for setup-worker action.`, SCOPE)
             return returnFailure(`Validating commission props failed.`)
         }
-        if (await setupStudy(data.url)) {
+        if (await setupStudy({ file: data.file, url: data.url })) {
             return returnSuccess({
                 dataLength: READER.dataLength,
                 recordingLength: READER.totalLength,
@@ -186,6 +191,6 @@ const cacheSignals = () => {
     return READER.cacheSignals()
 }
 
-const setupStudy = async (url: string) => {
-    return READER.setupStudy(url)
+const setupStudy = async (source: SignalSourceOptions) => {
+    return READER.setupStudy(source)
 }

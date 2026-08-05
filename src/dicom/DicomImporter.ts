@@ -100,7 +100,7 @@ export default class DicomImporter extends GenericStudyImporter implements Signa
 
     async importFile (source: File | StudyFileContext, config?: ConfigReadUrl) {
         const file = (source as StudyFileContext).file || source as File
-        Log.debug(`Loading DICOM from file ${file.webkitRelativePath}.`, SCOPE)
+        Log.debug(`Loading DICOM from file ${file.webkitRelativePath || file.name}.`, SCOPE)
         const studyFile = {
             file: file,
             format: 'dicom',

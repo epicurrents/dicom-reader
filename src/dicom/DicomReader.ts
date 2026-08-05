@@ -7,7 +7,7 @@
 
 //import type { DicomHeader } from '#types'
 import { GenericSignalReader } from '@epicurrents/core'
-import { AppSettings, SignalCachePart, SignalDataReader } from '@epicurrents/core/dist/types'
+import { AppSettings, SignalCachePart, SignalSourceOptions, SignalStudyReader } from '@epicurrents/core/dist/types'
 import DicomDecoder from '#dicom/DicomDecoder'
 import { eventsToBiosignalEvents } from '#util'
 import type { DicomDataset } from '#types'
@@ -16,7 +16,7 @@ import { Log } from 'scoped-event-log/dist/Log'
 
 const SCOPE = 'DicomReader'
 
-export default class DicomReader extends GenericSignalReader implements SignalDataReader {
+export default class DicomReader extends GenericSignalReader implements SignalStudyReader {
     protected _fileTypeHeader: DicomDataset | null = null
     protected _decoder: DicomDecoder | null = null
     /** A method to pass update messages through. */
@@ -27,6 +27,27 @@ export default class DicomReader extends GenericSignalReader implements SignalDa
     constructor (settings: AppSettings) {
         super(Uint8Array)
         this.SETTINGS = settings
+    }
+
+    /**
+     * Fetch the full DICOM file from the source URL. Returns null when there is no URL to fetch from
+     * or the request fails; the caller reports the failure with the source name it already has.
+     */
+    protected async _fetchSource (source: SignalSourceOptions): Promise<ArrayBuffer | null> {
+        if (!source.url) {
+            Log.error(`Neither a source file nor a source URL was given for the DICOM study.`, SCOPE)
+            return null
+        }
+        const headers = new Headers()
+        if (source.authHeader) {
+            headers.set('Authorization', source.authHeader)
+        }
+        const response = await fetch(source.url, { headers })
+        if (!response.ok) {
+            Log.error(`Failed to fetch DICOM file from ${source.url} (HTTP ${response.status}).`, SCOPE)
+            return null
+        }
+        return response.arrayBuffer()
     }
 
     protected _updateCache () {
@@ -69,43 +90,27 @@ export default class DicomReader extends GenericSignalReader implements SignalDa
         return this._updateCache()
     }
 
-    /**
-     * Set up study params for file loading. This will initializes the shared array buffer.
-     * @param source - Source URL or File of the DICOM data file.
-     * @returns Success (true/false).
-     */
-    async setupStudy (source: string | File): Promise<boolean> {
-        if (typeof source === 'string') {
-            try {
-                const response = await fetch(source)
-                if (!response.ok) {
-                    Log.error(`Failed to fetch DICOM file from ${source} (HTTP ${response.status}).`, SCOPE)
-                    return false
-                }
-                const arrayBuffer = await response.arrayBuffer()
-                const dicom = await dcmjs.data.DicomMessage.readFile(arrayBuffer)
-                const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset
-                if (!dataset) {
-                    Log.error(`Failed to read DICOM file from ${source}.`, SCOPE)
-                    return false
-                }
-                this._fileTypeHeader = dataset
-            } catch (e: unknown) {
-                // A transport failure (offline, DNS, CORS, TLS) must resolve to false, not reject
-                // up into the worker handler where no reply would be posted and the commission hangs.
-                Log.error(`Failed to load DICOM file from ${source}: ${(e as Error).message}.`, SCOPE)
+    async setupStudy (source: SignalSourceOptions): Promise<boolean> {
+        const sourceName = source.file?.name || source.url || 'DICOM source'
+        try {
+            const arrayBuffer = source.file
+                                ? await source.file.arrayBuffer()
+                                : await this._fetchSource(source)
+            if (!arrayBuffer) {
                 return false
             }
-        } else if (source instanceof File) {
-            const dicom = await dcmjs.data.DicomMessage.readFile(source.arrayBuffer())
+            const dicom = await dcmjs.data.DicomMessage.readFile(arrayBuffer)
             const dataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicom.dict) as DicomDataset
             if (!dataset) {
-                Log.error(`Failed to read DICOM file ${source.name}.`, SCOPE)
+                Log.error(`Failed to read DICOM file from ${sourceName}.`, SCOPE)
                 return false
             }
             this._fileTypeHeader = dataset
-        } else {
-            Log.error(`Invalid source type for DICOM setup: ${typeof source}.`, SCOPE)
+        } catch (e: unknown) {
+            // A transport or read failure (offline, DNS, CORS, TLS, a file that moved) must resolve
+            // to false, not reject up into the worker handler where no reply would be posted and the
+            // commission hangs.
+            Log.error(`Failed to load DICOM file from ${sourceName}: ${(e as Error).message}.`, SCOPE)
             return false
         }
         const ws = this._fileTypeHeader.WaveformSequence[0]

@@ -1,196 +1,67 @@
 /**
- * Epicurrents DICOM worker.
+ * Epicurrents DICOM worker. The commissions a signal reader answers alike come from
+ * {@link SignalReaderWorker}; what is added here is `setup-worker`, which opens the study.
  * @package    epicurrents/dicom-reader
  * @copyright  2025 Sampsa Lohi
  * @license    Apache-2.0
  */
 
 import { SETTINGS } from '@epicurrents/core'
-import type {
-    ConfigChannelFilter,
-    SignalSourceOptions,
-    WorkerMessage,
-} from '@epicurrents/core/dist/types'
-import { Log } from 'scoped-event-log'
+import { SignalReaderWorker } from '@epicurrents/core/dist/workers'
+import type { WorkerMessage } from '@epicurrents/core/dist/types'
 import { validateCommissionProps } from '@epicurrents/core/dist/util'
+import { Log } from 'scoped-event-log'
 import DicomReader from '#dicom/DicomReader'
 
+const SCOPE = 'DicomWorker'
 
-const SCOPE = "DicomWorker"
+class DicomWorker extends SignalReaderWorker<DicomReader> {
+    constructor () {
+        super(new DicomReader(SETTINGS))
+        this._reader.setUpdateCallback((update: { [prop: string]: unknown }) => {
+            if (update.action === 'cache-signals') {
+                postMessage(update)
+            }
+        })
+        this.extendActionMap([['setup-worker', this.setupWorker]])
+    }
 
-const READER = new DicomReader(SETTINGS)
+    /**
+     * Open the study the commission describes.
+     * @param msgData - Data property from the message to the worker.
+     */
+    async setupWorker (msgData: WorkerMessage['data']) {
+        const data = validateCommissionProps(
+            msgData as WorkerMessage['data'] & {
+                file?: File
+                url?: string
+            },
+            {
+                // A local study is read from the File and a remote one from the URL, so neither can
+                // be required on its own; `setupStudy` rejects a source that has neither.
+                file: 'File?',
+                url: 'String?',
+            }
+        )
+        if (!data) {
+            return this._failure(msgData, `Validating commission props failed.`)
+        }
+        if (!await this._reader.setupStudy({ file: data.file, url: data.url })) {
+            return this._failure(msgData, `Setting up study failed.`)
+        }
+        return this._success(msgData, {
+            dataLength: this._reader.dataLength,
+            recordingLength: this._reader.totalLength,
+        })
+    }
+}
+
+const WORKER = new DicomWorker()
 
 onmessage = async (message: WorkerMessage) => {
     if (!message?.data?.action) {
         return
     }
-    const { action, rn } = message.data
-    /** Return a success response to the service. */
-    const returnSuccess = (results?: { [key: string]: unknown }) => {
-        postMessage({
-            rn: rn,
-            action: action,
-            success: true,
-            ...results
-        })
-    }
-    /** Return a failure response to the service. */
-    const returnFailure = (error: string | string[]) => {
-        postMessage({
-            rn: rn,
-            action: action,
-            success: false,
-            error: error,
-        })
-    }
-    Log.debug(`Received message with action ${action}.`, SCOPE)
-    if (action === 'cache-signals') {
-        try {
-            const success = await cacheSignals()
-            return returnSuccess({ complete: success })
-        } catch (e) {
-            // A caught failure must still settle the commission or the caller waits forever.
-            return returnFailure(`Caching signals failed: ${(e as Error).message}.`)
-        }
-    } else if (action === 'get-signals') {
-        // The direct get-signals should only be encountered when the requested signals have not been cached yet,
-        // so whenever raw signals are requested and very rarely in other cases. Thus no need to use a lot of
-        // time to optimize this method.
-        if (!READER.cacheReady) {
-            return returnFailure(`Cannot return signals if signal cache is not yet initialized.`)
-        }
-        const data = validateCommissionProps(
-            message.data as WorkerMessage['data'] & {
-                config?: ConfigChannelFilter
-                range: number[]
-            },
-            {
-                config: 'Object?',
-                range: ['Number', 'Number'],
-            }
-        )
-        if (!data) {
-            return
-        }
-        try {
-            const sigs = await getSignals(data.range, data.config)
-            const annos = getAnnotations(data.range)
-            if (sigs) {
-                return returnSuccess({
-                    annotations: annos,
-                    interruptions: [],
-                    range: message.data.range,
-                    ...sigs
-                })
-            } else {
-                return returnFailure(`Reader did not return any signals.`)
-            }
-        } catch (e) {
-            return returnFailure(e as string)
-        }
-    } else if (action === 'release-cache') {
-        await READER.releaseCache()
-        return returnSuccess()
-    } else if (action === 'setup-cache') {
-        if (message.data.useMemoryManager) {
-            const data = validateCommissionProps(
-                message.data as WorkerMessage['data'] & {
-                    buffer: SharedArrayBuffer
-                    range: { start: number }
-                },
-                {
-                    buffer: 'SharedArrayBuffer',
-                    range: 'Object',
-                }
-            )
-            if (!data) {
-                return
-            }
-            const exportProps = await READER.setupMutex(data.buffer, data.range.start)
-            if (exportProps) {
-                // Pass the generated shared buffers back to main thread.
-                return returnSuccess({
-                    cacheProperties: exportProps,
-                })
-            } else {
-                return returnFailure(`Mutex setup failed.`)
-            }
-        } else {
-            const success = READER.setupCache()
-            if (success) {
-                return returnSuccess()
-            } else {
-                return returnFailure(`Cache setup failed.`)
-            }
-        }
-    } else if (action === 'setup-worker') {
-        const data = validateCommissionProps(
-            message.data as WorkerMessage['data'] & {
-                url?: string
-                file?: File
-            },
-            {
-                // A local study is read from the File and a remote one from the URL, so neither
-                // can be required on its own; `setupStudy` rejects a source that has neither.
-                url: 'String?',
-                file: 'File?',
-            }
-        )
-        if (!data) {
-            Log.error(`Invalid data for setup-worker action.`, SCOPE)
-            return returnFailure(`Validating commission props failed.`)
-        }
-        if (await setupStudy({ file: data.file, url: data.url })) {
-            return returnSuccess({
-                dataLength: READER.dataLength,
-                recordingLength: READER.totalLength,
-            })
-        } else {
-            Log.error(`Setting up study failed.`, SCOPE)
-            return returnFailure(`Setting up study failed.`)
-        }
-    } else if (action === 'shutdown') {
-        await READER.releaseCache()
-    } else if (action === 'update-settings') {
-        const data = validateCommissionProps(
-            message.data,
-            {
-                settings: 'Object',
-            }
-        )
-        if (!data) {
-            return
-        }
-        Object.assign(SETTINGS, data.settings)
-        return returnSuccess()
-    }
-}
-
-const updateCallback = (update: { [prop: string]: unknown }) => {
-    if (update.action === 'cache-signals') {
-        postMessage(update)
-    }
-}
-READER.setUpdateCallback(updateCallback)
-
-const getAnnotations = (range: number[]) => {
-    // TODO: DICOM labels?
-    return READER.getEvents(range)
-}
-
-const getSignals = (range: number[], config?: ConfigChannelFilter) => {
-    return READER.getSignals(range, config)
-}
-
-/**
- * Cache raw signals from the file at the preset URL.
- * @param startFrom - Start caching from the given time point (in seconds) - optional.
- * @returns Success (true/false).
- */
-const cacheSignals = () => {
-    return READER.cacheSignals()
-}
-
-const setupStudy = async (source: SignalSourceOptions) => {
-    return READER.setupStudy(source)
+    Log.debug(`Received message with action ${message.data.action}.`, SCOPE)
+    WORKER.handleMessage(message)
 }

@@ -96,6 +96,25 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
                 this._reader.releaseCache()
                 return this.returnSuccess(message)
             }
+            case 'set-signal-polarity': {
+                const data = validateCommissionProps(
+                    message as WorkerMessage['data'] & {
+                        indices: number[]
+                        inverted: boolean
+                    },
+                    {
+                        indices: 'Array',
+                        inverted: 'Boolean',
+                    },
+                    true,
+                    this.returnMessage.bind(this)
+                )
+                if (!data) {
+                    return
+                }
+                await this._reader.setSignalPolarityInverted(data.inverted, ...data.indices)
+                return this.returnSuccess(message)
+            }
             case 'setup-cache': {
                 // Duration is not a mandatory property.
                 const duration = (message.dataDuration as number) || 0

@@ -7,12 +7,12 @@
 
 import DicomReader from '#dicom/DicomReader'
 import { ServiceWorkerSubstitute } from '@epicurrents/core'
-import { validateCommissionProps } from '@epicurrents/core/dist/util'
+import { validateCommissionProps } from '@epicurrents/core/util'
 import type {
     ConfigChannelFilter,
     GetSignalsResponse,
     WorkerMessage,
-} from '@epicurrents/core/dist/types'
+} from '@epicurrents/core/types'
 import { Log } from 'scoped-event-log'
 
 const SCOPE = 'DicomWorkerSubstitute'

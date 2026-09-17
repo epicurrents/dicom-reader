@@ -7,7 +7,7 @@
 
 //import type {
 //    SafeObject,
-//} from "@epicurrents/core/dist/types"
+//} from "@epicurrents/core/types"
 
 
 /**

@@ -8,8 +8,8 @@
 import type { DicomDataset } from '#types'
 import { GenericBiosignalHeader } from '@epicurrents/core'
 import type { DicomAnnotationSequence, DicomChannelDefinitionSequence } from '#types'
-import { secondsToTimeString } from '@epicurrents/core/dist/util'
-import type { AnnotationEventTemplate } from '@epicurrents/core/dist/types'
+import { secondsToTimeString } from '@epicurrents/core/util'
+import type { AnnotationEventTemplate } from '@epicurrents/core/types'
 
 export const eventsToBiosignalEvents = (events: DicomAnnotationSequence[]) => {
     return events.map((event) => {

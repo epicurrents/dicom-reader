@@ -6,7 +6,7 @@
  */
 
 
-import type { SignalDataDecoder } from '@epicurrents/core/dist/types'
+import type { SignalDataDecoder } from '@epicurrents/core/types'
 import type { DicomDataset } from '#types'
 import { eventsToBiosignalEvents } from '#util'
 import DicomDatasetRecord from '#dicom/DicomDatasetRecord'

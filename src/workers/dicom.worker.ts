@@ -7,9 +7,9 @@
  */
 
 import { SETTINGS } from '@epicurrents/core'
-import { SignalReaderWorker } from '@epicurrents/core/dist/workers'
-import type { WorkerMessage } from '@epicurrents/core/dist/types'
-import { validateCommissionProps } from '@epicurrents/core/dist/util'
+import { SignalReaderWorker } from '@epicurrents/core/workers'
+import type { WorkerMessage } from '@epicurrents/core/types'
+import { validateCommissionProps } from '@epicurrents/core/util'
 import { Log } from 'scoped-event-log'
 import DicomReader from '#dicom/DicomReader'
 

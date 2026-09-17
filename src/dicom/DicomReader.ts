@@ -7,7 +7,7 @@
 
 //import type { DicomHeader } from '#types'
 import { GenericSignalReader } from '@epicurrents/core'
-import { AppSettings, SignalCachePart, SignalSourceOptions, SignalStudyReader } from '@epicurrents/core/dist/types'
+import { AppSettings, SignalCachePart, SignalSourceOptions, SignalStudyReader } from '@epicurrents/core/types'
 import DicomDecoder from '#dicom/DicomDecoder'
 import { eventsToBiosignalEvents } from '#util'
 import type { DicomDataset } from '#types'

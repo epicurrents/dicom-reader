@@ -8,7 +8,7 @@
 import { GenericBiosignalHeader } from '@epicurrents/core'
 import { convertDicomDateTime, extractSignalModality } from '#util'
 import type { DicomChannelDefinitionSequence, DicomDataset } from '#types'
-import type { AnnotationEventTemplate } from '@epicurrents/core/dist/types'
+import type { AnnotationEventTemplate } from '@epicurrents/core/types'
 
 export default class DicomDatasetRecord extends GenericBiosignalHeader {
     protected _physicalSignals = [] as number[][]

@@ -17,6 +17,7 @@ import { headerToBiosignalHeader } from '#util'
 import type { DicomDataset } from '#types'
 import { Log } from 'scoped-event-log'
 import * as dcmjs from 'dcmjs'
+import InlineDicomWorker from '../workers/dicom.worker.ts?worker&inline'
 
 const SCOPE = 'DicomImporter'
 
@@ -89,11 +90,7 @@ export default class DicomImporter extends GenericStudyImporter implements Signa
         //    return this._getWorkerSubstitute()
         //}
         const getWorkerOverride = this._workerOverrides.get(override || 'dicom')
-        const worker = getWorkerOverride ? getWorkerOverride() : new Worker(
-            /* webpackChunkName: 'dicom.worker' */
-            new URL('../workers/dicom.worker', import.meta.url),
-            { type: 'module' }
-        )
+        const worker = getWorkerOverride ? getWorkerOverride() : new InlineDicomWorker()
         Log.registerWorker(worker)
         return worker
     }

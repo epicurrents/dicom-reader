@@ -10,7 +10,6 @@ import { ServiceWorkerSubstitute } from '@epicurrents/core'
 import { validateCommissionProps } from '@epicurrents/core/util'
 import type {
     ConfigChannelFilter,
-    GetSignalsResponse,
     WorkerMessage,
 } from '@epicurrents/core/types'
 import { Log } from 'scoped-event-log'
@@ -42,8 +41,7 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
             case 'cache-signals': {
                 try {
                     const success = await this._reader.cacheSignals()
-                    return this.returnSuccess({
-                        ...message,
+                    return this.returnSuccess(message, {
                         complete: success,
                     })
                 } catch (e) {
@@ -77,12 +75,11 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
                     const events = this._reader.getEvents(data.range)
                     const interruptions = this._reader.getInterruptions(data.range)
                     if (sigs) {
-                        return this.returnSuccess({
-                            ...message,
+                        return this.returnSuccess(message, {
                             events,
                             interruptions,
                             ...sigs,
-                        } as WorkerMessage['data'] & Omit<GetSignalsResponse, 'success'>)
+                        })
                     } else {
                         Log.error(`Failed to get signals for range ${data.range.join('-')}.`, SCOPE)
                         return this.returnFailure(message)
@@ -119,8 +116,7 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
                 // Duration is not a mandatory property.
                 const duration = (message.dataDuration as number) || 0
                 const cache = this._reader.setupCache(duration)
-                return this.returnSuccess({
-                    ...message,
+                return this.returnSuccess(message, {
                     cacheProperties: cache,
                 })
             }
@@ -144,8 +140,7 @@ export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
                 }
                 const result = await this._reader.setupStudy({ file: data.file, url: data.url })
                 if (result) {
-                    return this.returnSuccess({
-                        ...message,
+                    return this.returnSuccess(message, {
                         dataLength: this._reader.dataLength,
                         recordingLength: this._reader.totalLength,
                     })

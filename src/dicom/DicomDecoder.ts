@@ -5,14 +5,61 @@
  * @license    Apache-2.0
  */
 
-
-import type { SignalDataDecoder } from '@epicurrents/core/types'
-import type { DicomDataset } from '#types'
-import { eventsToBiosignalEvents } from '#util'
+import type { SignalDataDecoder, SignalDecodeResult } from '@epicurrents/core/types'
+import type { DicomDataset, DicomWaveformSequence } from '#types'
+import { eventsToBiosignalEvents, signalUnitScale } from '#util'
 import DicomDatasetRecord from '#dicom/DicomDatasetRecord'
 import { Log } from 'scoped-event-log'
 
 const SCOPE = 'DicomDecoder'
+
+/**
+ * A view over the interleaved samples of a multiplex group, as its sample interpretation describes
+ * them.
+ *
+ * Only the linear interpretations are supported. The two companded 8-bit forms are G.711 mu-law and
+ * A-law, which have to be expanded rather than read, and the 64-bit widths do not fit a JavaScript
+ * number without a BigInt round trip; a file using any of them is refused rather than misread.
+ * @param waveform - The multiplex group whose data is being read.
+ * @param buffer - The group's waveform data.
+ * @returns A view over the samples, or null when the interpretation is unsupported or disagrees with the buffer.
+ */
+const sampleView = (waveform: DicomWaveformSequence, buffer: ArrayBuffer) => {
+    let interpretation = waveform.WaveformSampleInterpretation
+    if (!interpretation) {
+        // The attribute is required, so a file without it is already malformed; assuming the signed
+        // form of the allocated width reads the overwhelmingly common case correctly.
+        interpretation = waveform.WaveformBitsAllocated === 8
+                         ? 'SB'
+                         : waveform.WaveformBitsAllocated === 32 ? 'SL' : 'SS'
+        Log.warn(
+            `The DICOM waveform declares no sample interpretation; assuming ${interpretation}.`,
+            SCOPE
+        )
+    }
+    const views = {
+        SB: Int8Array,
+        SL: Int32Array,
+        SS: Int16Array,
+        UB: Uint8Array,
+        UL: Uint32Array,
+        US: Uint16Array,
+    }
+    const view = views[interpretation as keyof typeof views]
+    if (!view) {
+        Log.error(`Waveform sample interpretation ${interpretation} is not supported.`, SCOPE)
+        return null
+    }
+    if (buffer.byteLength%view.BYTES_PER_ELEMENT) {
+        Log.error(
+            `Waveform data of ${buffer.byteLength} bytes does not divide into ` +
+            `${view.BYTES_PER_ELEMENT}-byte ${interpretation} samples.`,
+            SCOPE
+        )
+        return null
+    }
+    return new view(buffer)
+}
 
 export default class DicomDecoder implements SignalDataDecoder {
     protected _dataset: DicomDataset | null = null
@@ -27,109 +74,141 @@ export default class DicomDecoder implements SignalDataDecoder {
         return this._output
     }
 
-    decodeData (dataset = this._dataset) {
+    decode () {
+        const data = this.decodeData()
+        const header = this.decodeHeader()
+        if (header) {
+            // `decodeHeader` leaves a record with no signals, so the decoded ones are attached here
+            // rather than in a second record that would replace it.
+            this._output = new DicomDatasetRecord(header, data?.signals ?? [])
+        }
+        return {
+            data,
+            header,
+        }
+    }
+
+    /**
+     * Decode the signals of a DICOM dataset's first multiplex group.
+     *
+     * The samples are read into the SI unit of their quantity, applying the channel's calibration
+     * where it has one. An uncalibrated channel is passed through unscaled, since its sample values
+     * carry no defined unit to convert from.
+     * @param dataset - Dataset to decode, defaulting to the one the decoder was constructed with.
+     * @param buffer - Waveform data to decode instead of the dataset's own (optional).
+     * @returns The decoded signals with the dataset's annotations, or null if decoding failed.
+     */
+    decodeData (dataset = this._dataset, buffer?: ArrayBuffer): SignalDecodeResult | null {
         if (!dataset) {
             Log.error('No DICOM dataset available to decode data from.', SCOPE)
             return null
         }
-        if (dataset.WaveformSequence[0].WaveformData[0]) {
-            this._input = dataset.WaveformSequence[0].WaveformData[0]
+        const waveform = dataset.WaveformSequence?.[0]
+        if (!waveform) {
+            Log.error('No waveform sequence found in the DICOM dataset.', SCOPE)
+            return null
         }
-        if (!this._input) {
+        // An explicitly given buffer wins, then the dataset's own data, and only then a buffer left
+        // by `setInput` — which is the only way to decode a dataset whose data has been stripped.
+        const input = buffer ?? waveform.WaveformData?.[0] ?? this._input
+        if (!input) {
             Log.error('No waveform data found in the DICOM dataset.', SCOPE)
             return null
         }
+        if (!(input instanceof ArrayBuffer)) {
+            Log.error('Waveform data must be an ArrayBuffer.', SCOPE)
+            return null
+        }
+        this._input = input
         if (dataset.WaveformPresentationGroupSequence) {
-            Log.error('Waveform presentation group sequence is not supported yet.', SCOPE)
-            return null
+            // The presentation group carries display preferences — channel order, colours, scales —
+            // and nothing that changes the samples, so it is ignored rather than refused.
+            Log.warn(
+                'The DICOM dataset carries a waveform presentation group, whose display preferences ' +
+                'are not applied.',
+                SCOPE
+            )
         }
-        const ws = dataset.WaveformSequence[0]
-        if (!(this._input instanceof ArrayBuffer)) {
-            Log.error('Input must be an ArrayBuffer.', SCOPE)
-            return null
-        }
-        const sampleBytes = ws.WaveformBitsAllocated/8
-        const sampleLen = this._input.byteLength/sampleBytes
-        if (sampleLen%ws.NumberOfWaveformChannels) {
+        const channelCount = waveform.NumberOfWaveformChannels
+        const sampleCount = waveform.NumberOfWaveformSamples
+        if (!channelCount || !sampleCount || !waveform.SamplingFrequency) {
             Log.error(
-                `Input data length ${this._input.byteLength} is not divisible by the number of waveform channels ` +
-                `${ws.NumberOfWaveformChannels}.`,
+                `The DICOM waveform does not describe its data: ${channelCount} channels, ` +
+                `${sampleCount} samples at ${waveform.SamplingFrequency} Hz.`,
                 SCOPE
             )
             return null
         }
-        if (sampleLen/ws.NumberOfWaveformChannels !== ws.NumberOfWaveformSamples) {
+        const samples = sampleView(waveform, input)
+        if (!samples) {
+            return null
+        }
+        if (samples.length%channelCount) {
             Log.error(
-                `Input data sample length ${sampleLen} divided by the number of waveform channels ` +
-                `${ws.NumberOfWaveformChannels} does not match the number of waveform samples ` +
-                `${ws.NumberOfWaveformSamples}.`,
+                `Input data length ${samples.length} is not divisible by the number of waveform ` +
+                `channels ${channelCount}.`,
                 SCOPE
             )
             return null
         }
-        // Separate multiplex data to each channel.
-        const digChannels = [] as Int16Array[]
-        const physChannels = [] as number[][]
-        const sampleScales = new Array<number>(ws.NumberOfWaveformChannels).fill(1.0)
-        for (let i=0; i<ws.NumberOfWaveformChannels; i++) {
-            const channel = ws.ChannelDefinitionSequence[i]
-            const channelOffset = channel.ChannelOffset || 0
-            const sampleSkew = (channel.ChannelSampleSkew || 0) + channelOffset*ws.SamplingFrequency
-            const timeSkew = (channel.ChannelTimeSkew || 0) + channelOffset
-            const nSamples = ws.NumberOfWaveformSamples
-            Log.debug(`Channel ${i} has a skew of ${sampleSkew} samples / ${timeSkew} seconds.`, SCOPE)
-            digChannels.push(new Int16Array(new ArrayBuffer(nSamples*2)))
-            physChannels.push(new Array(nSamples).fill(0.0))
-            const physUnit = channel.ChannelSensitivityUnitsSequence[0]?.CodeValue || ''
-            // Convert to to volts.
-            const sampleScale = physUnit.toLowerCase() === 'uv' || physUnit.toLowerCase() === 'µv' ? 1e-6
-                                : physUnit.toLowerCase() === 'mv' ? 1e-3 : 1.0
-            sampleScales[i] = sampleScale
+        if (samples.length/channelCount !== sampleCount) {
+            Log.error(
+                `Input data sample length ${samples.length} divided by the number of waveform ` +
+                `channels ${channelCount} does not match the number of waveform samples ` +
+                `${sampleCount}.`,
+                SCOPE
+            )
+            return null
         }
-        const multiplexArray = new Int16Array(this._input)
-        for (let i=0; i<ws.NumberOfWaveformSamples; i++) {
-            for (let j=0; j<ws.NumberOfWaveformChannels; j++) {
-                const channel = ws.ChannelDefinitionSequence[j]
-                const channelOffset = channel.ChannelOffset || 0
-                const sampleSkew = (channel.ChannelSampleSkew || 0) + channelOffset*ws.SamplingFrequency
-                const timeSkew = (channel.ChannelTimeSkew || 0) + channelOffset
-                const sampleTime = i/ws.SamplingFrequency
-                if (i < sampleSkew || sampleTime < timeSkew) {
-                    // Channel data is starting later.
+        const definitions = waveform.ChannelDefinitionSequence ?? []
+        // A skew or an offset displaces a channel's samples in time relative to the rest of the
+        // group. Honouring one means resampling that channel onto the group's grid, which this
+        // decoder does not do, so a file declaring any is decoded as though its channels aligned.
+        const displaced = definitions.filter(
+            channel => channel.ChannelSampleSkew || channel.ChannelTimeSkew || channel.ChannelOffset
+        ).length
+        if (displaced) {
+            Log.warn(
+                `${displaced} of ${definitions.length} DICOM channels declare a sample skew or an ` +
+                `offset, which is not applied; their samples are placed as though aligned.`,
+                SCOPE
+            )
+        }
+        // Separate the multiplexed data into each channel.
+        const signals = [] as number[][]
+        for (let channel=0; channel<channelCount; channel++) {
+            const definition = definitions[channel]
+            // The calibration attributes accompany `ChannelSensitivity` and are present only for a
+            // channel whose samples represent defined units.
+            const sensitivity = definition?.ChannelSensitivity ?? 1
+            const correction = definition?.ChannelSensitivityCorrectionFactor ?? 1
+            // The baseline is the offset of sample value zero from actual zero, in the channel's own
+            // physical units, so it is added to the scaled sample rather than subtracted from it.
+            const baseline = definition?.ChannelBaseline ?? 0
+            const unitScale = definition ? signalUnitScale(definition) : 1
+            const values = new Array<number>(sampleCount).fill(0)
+            for (let i=0; i<sampleCount; i++) {
+                const value = samples[i*channelCount + channel]
+                if (value === waveform.WaveformPaddingValue) {
+                    // Zero stands in for padding, so a gap is flat rather than a spike.
                     continue
                 }
-                const sampleOffset = i*ws.NumberOfWaveformChannels + j
-                const sampleValue = multiplexArray[sampleOffset]
-                if (
-                    isNaN(sampleValue)
-                    || sampleValue < -32768 || sampleValue > 32767
-                    || sampleValue === Infinity || sampleValue === -Infinity
-                ) {
-                    Log.warn(`Sample value at index ${i} for channel ${j} is not valid.`, SCOPE)
-                    digChannels[j][i] = 0
-                    physChannels[j][i] = 0
-                    continue
-                }
-                digChannels[j][i] = sampleValue
-                if (sampleValue === ws.WaveformPaddingValue) {
-                    // Use zero as a visual padding value.
-                    physChannels[j][i] = 0
-                    continue
-                }
-                // Convert digital sample to a floating point value and apply scaling.
-                const physValue = sampleValue*ws.ChannelDefinitionSequence[j].ChannelSensitivity
-                                  * ws.ChannelDefinitionSequence[j].ChannelSensitivityCorrectionFactor
-                                  - ws.ChannelDefinitionSequence[j].ChannelBaseline
-                physChannels[j][i] = physValue*sampleScales[j]
+                values[i] = (value*sensitivity*correction + baseline)*unitScale
             }
+            signals.push(values)
         }
         return {
-            // TODO: Combine or separate events and labels in response?
-            events: eventsToBiosignalEvents(dataset.WaveformAnnotationSequence),
-            interruptions: new Map(), // DICOM waveform sequence does not have interruptions.
-            signals: physChannels,
+            events: eventsToBiosignalEvents(dataset.WaveformAnnotationSequence, waveform),
+            interruptions: new Map(), // A DICOM multiplex group cannot be interrupted.
+            signals,
         }
     }
+
+    /**
+     * Decode the header of a DICOM dataset, which is the dataset without its samples.
+     * @param dataset - Dataset to decode, defaulting to the one the decoder was constructed with.
+     * @returns The dataset with its waveform data removed, or null if there was nothing to decode.
+     */
     decodeHeader (dataset = this._dataset): DicomDataset | null {
         if (!dataset) {
             Log.error('No DICOM dataset available to decode header.', SCOPE)
@@ -137,30 +216,20 @@ export default class DicomDecoder implements SignalDataDecoder {
         }
         const header = {
             ...dataset,
-            WaveformSequence: [
-                {
-                    ...dataset.WaveformSequence[0],
-                    WaveformData: [], // Remove the actual data fromt the header to save memory.
+            WaveformSequence: dataset.WaveformSequence.map((waveform, index) => {
+                return {
+                    ...waveform,
+                    // Drop the samples; the header is kept for as long as the recording is open and
+                    // a copy of the data would double its footprint.
+                    WaveformData: index === 0 ? [] : waveform.WaveformData,
                 }
-            ]
+            }),
         }
         this._output = new DicomDatasetRecord(header)
         return header
     }
-    decode () {
-        const data = this._input ? this.decodeData(this._dataset as DicomDataset) : null
-        this._output = new DicomDatasetRecord(
-            this._dataset as DicomDataset,
-            [],
-            data?.signals || [],
-        )
-        return {
-            data,
-            header: this.decodeHeader(),
-        }
-    }
+
     setInput (buffer: ArrayBuffer): void {
         this._input = buffer
     }
-
 }

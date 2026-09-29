@@ -1,163 +1,71 @@
 /**
- * Epicurrents DICOM worker substitute. Allows using the DICOM reader in the main thread without an actual worker.
+ * Epicurrents DICOM worker substitute. Drives the DICOM reader on the main thread for environments
+ * without SharedArrayBuffer / cross-origin isolation.
+ *
+ * The shared commissions are answered by {@link SignalReaderWorkerSubstitute}, which runs the
+ * worker's own handlers, so the two cannot answer the same commission differently. What is added
+ * here is `setup-worker`, the one commission where the formats differ, and it is the same method the
+ * DICOM worker registers.
+ *
  * @package    epicurrents/dicom-reader
  * @copyright  2025 Sampsa Lohi
  * @license    Apache-2.0
  */
 
-import DicomReader from '#dicom/DicomReader'
-import { ServiceWorkerSubstitute } from '@epicurrents/core'
-import { validateCommissionProps } from '@epicurrents/core/util'
-import type {
-    ConfigChannelFilter,
-    WorkerMessage,
-} from '@epicurrents/core/types'
+import { SignalReaderWorkerSubstitute } from '@epicurrents/core'
+import type { WorkerMessage, WorkerSubstitute } from '@epicurrents/core/types'
 import { Log } from 'scoped-event-log'
+import DicomReader from '#dicom/DicomReader'
 
 const SCOPE = 'DicomWorkerSubstitute'
 
-export default class DicomWorkerSubstitute extends ServiceWorkerSubstitute {
-    protected _reader: DicomReader
+export default class DicomWorkerSubstitute extends SignalReaderWorkerSubstitute<DicomReader>
+    implements WorkerSubstitute {
+
     constructor () {
-        super()
         if (!window.__EPICURRENTS__?.RUNTIME) {
             Log.error(`Reference to main application was not found!`, SCOPE)
         }
-        this._reader = new DicomReader(window.__EPICURRENTS__.RUNTIME!.SETTINGS)
-        const updateCallback = (update: { [prop: string]: unknown }) => {
+        super(new DicomReader(window.__EPICURRENTS__.RUNTIME!.SETTINGS))
+        this._reader.setUpdateCallback((update: { [prop: string]: unknown }) => {
             if (update.action === 'cache-signals') {
                 this.returnMessage(update as WorkerMessage['data'])
             }
-        }
-        this._reader.setUpdateCallback(updateCallback)
+        })
+        // The substitute binds an added handler to itself before registering it, so an entry passed
+        // unbound here still runs with this substitute as its `this`.
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        this.extendActionMap([['setup-worker', this.setupWorker]])
     }
-    async postMessage (message: WorkerMessage['data']) {
-        if (!message?.action) {
-            return
-        }
-        const action = message.action
-        Log.debug(`Received message with action ${action}.`, SCOPE)
-        switch (action) {
-            case 'cache-signals': {
-                try {
-                    const success = await this._reader.cacheSignals()
-                    return this.returnSuccess(message, {
-                        complete: success,
-                    })
-                } catch (e) {
-                    Log.error(
-                        `An error occurred while trying to cache signals, operation was aborted.`,
-                    SCOPE, e as Error)
-                    return this.returnFailure(message)
-                }
-            }
-            case 'get-signals': {
-                // Extract job parameters.
-                const data = validateCommissionProps(
-                    message as WorkerMessage['data'] & {
-                        config?: ConfigChannelFilter
-                        range: number[]
-                    },
-                    {
-                        config: 'Object?',
-                        range: ['Number', 'Number'],
-                    },
-                    true,
-                    this.returnMessage.bind(this)
-                )
 
-                if (!data) {
-                    Log.error(`Invalid data for get-signals action.`, SCOPE)
-                    return this.returnFailure(message)
-                }
-                try {
-                    const sigs = await this._reader.getSignals(data.range, data.config)
-                    const events = this._reader.getEvents(data.range)
-                    const interruptions = this._reader.getInterruptions(data.range)
-                    if (sigs) {
-                        return this.returnSuccess(message, {
-                            events,
-                            interruptions,
-                            ...sigs,
-                        })
-                    } else {
-                        Log.error(`Failed to get signals for range ${data.range.join('-')}.`, SCOPE)
-                        return this.returnFailure(message)
-                    }
-                } catch (e) {
-                    Log.error(`Getting signals failed.`, SCOPE, e as Error)
-                    return this.returnFailure(message)
-                }
+    /**
+     * Open the study the commission describes.
+     * @param msgData - Data property from the commission.
+     */
+    async setupWorker (msgData: WorkerMessage['data']) {
+        const data = this._validate(
+            msgData as WorkerMessage['data'] & {
+                authHeader?: string
+                file?: File
+                url?: string
+            },
+            {
+                // A local study is read from the File and a remote one from the URL, so neither can
+                // be required on its own; `setupStudy` rejects a source that has neither.
+                authHeader: 'String?',
+                file: 'File?',
+                url: 'String?',
             }
-            case 'release-cache': {
-                this._reader.releaseCache()
-                return this.returnSuccess(message)
-            }
-            case 'set-signal-polarity': {
-                const data = validateCommissionProps(
-                    message as WorkerMessage['data'] & {
-                        indices: number[]
-                        inverted: boolean
-                    },
-                    {
-                        indices: 'Array',
-                        inverted: 'Boolean',
-                    },
-                    true,
-                    this.returnMessage.bind(this)
-                )
-                if (!data) {
-                    return
-                }
-                await this._reader.setSignalPolarityInverted(data.inverted, ...data.indices)
-                return this.returnSuccess(message)
-            }
-            case 'setup-cache': {
-                // Duration is not a mandatory property.
-                const duration = (message.dataDuration as number) || 0
-                const cache = this._reader.setupCache(duration)
-                return this.returnSuccess(message, {
-                    cacheProperties: cache,
-                })
-            }
-            case 'setup-worker': {
-                const data = validateCommissionProps(
-                    message as WorkerMessage['data'] & {
-                        url?: string
-                        file?: File
-                    },
-                    {
-                        // A local study is read from the File and a remote one from the URL, so neither
-                        // can be required on its own; `setupStudy` rejects a source that has neither.
-                        url: 'String?',
-                        file: 'File?',
-                    },
-                    true,
-                    this.returnMessage.bind(this)
-                )
-                if (!data) {
-                    return
-                }
-                const result = await this._reader.setupStudy({ file: data.file, url: data.url })
-                if (result) {
-                    return this.returnSuccess(message, {
-                        dataLength: this._reader.dataLength,
-                        recordingLength: this._reader.totalLength,
-                    })
-                } else {
-                    return this.returnFailure(message)
-                }
-            }
-            case 'shutdown':
-            case 'decommission': {
-                await this._reader.destroy()
-                this._reader = null as unknown as DicomReader
-                super.shutdown()
-                return this.returnSuccess(message)
-            }
-            default: {
-                super.postMessage(message)
-            }
+        )
+        if (!data) {
+            return false
         }
+        if (!await this._reader.setupStudy({ authHeader: data.authHeader, file: data.file, url: data.url })) {
+            return this._failure(msgData, `Setting up study failed.`)
+        }
+        return this._success(msgData, {
+            dataLength: this._reader.dataLength,
+            recordingLength: this._reader.totalLength,
+        })
     }
 }

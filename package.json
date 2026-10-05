@@ -1,6 +1,6 @@
 {
   "name": "@epicurrents/dicom-reader",
-  "version": "0.0.0-0",
+  "version": "0.0.0",
   "description": "Epicurrents DICOM file reader",
   "keywords": [
     "dicom",

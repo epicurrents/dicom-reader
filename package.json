@@ -2,6 +2,17 @@
   "name": "@epicurrents/dicom-reader",
   "version": "0.0.0-0",
   "description": "Epicurrents DICOM file reader",
+  "keywords": [
+    "dicom",
+    "waveform",
+    "biosignal",
+    "epicurrents",
+    "typescript"
+  ],
+  "homepage": "https://github.com/epicurrents/dicom-reader#readme",
+  "bugs": {
+    "url": "https://github.com/epicurrents/dicom-reader/issues"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
